@@ -181,6 +181,9 @@ def save_candidate(con, project_id, original_text, summary, candidate_type="new_
 
 
 def project_is_complete(con, project_id):
+    from services.project_context import is_active_project
+    if is_active_project(con, project_id):
+        return False
     return bool(con.execute(
         "SELECT 1 FROM documents WHERE project_id=? AND document_type='성과보고서' AND status='approved' LIMIT 1",
         (project_id,),

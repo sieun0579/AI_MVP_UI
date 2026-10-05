@@ -66,6 +66,15 @@ def _doc_type(name):
     return "회의록"
 
 
+def _is_manual(path):
+    return (
+        path.parent.name == "_manuals"
+        or "매뉴얼" in path.name
+        or "메뉴얼" in path.name
+        or "업무 양식" in path.name
+    )
+
+
 def import_all(db_path="data/momentlab.db"):
     con = init_db(db_path)
     links = {}
@@ -80,7 +89,8 @@ def import_all(db_path="data/momentlab.db"):
         if path.suffix.lower() not in {".txt", ".md", ".csv", ".docx"}:
             continue
         text = extract_text(path)
-        project_id = path.parent.name
+        manual = _is_manual(path)
+        project_id = "ORG" if manual else path.parent.name
         version = _version(path.name, text)
         base_id = _field(text, "문서 ID") or re.sub(r"[^A-Z0-9]+", "-", path.stem.upper()).strip("-")
         document_id = base_id if version.lower() in base_id.lower() else f"{base_id}-{version}"
@@ -89,7 +99,7 @@ def import_all(db_path="data/momentlab.db"):
         family = re.sub(r"-v?\d+(?:\.\d+)?$", "", document_id, flags=re.I)
         row = links.get(path.name, {})
         status = _status(path.name, text)
-        doc_type = _doc_type(path.name)
+        doc_type = "업무매뉴얼" if manual else _doc_type(path.name)
         con.execute("DELETE FROM document_search_index WHERE document_id=?", (document_id,))
         con.execute("""INSERT OR REPLACE INTO documents
           (document_id,project_id,document_family_id,title,document_type,version,status,owner,reviewer,approver,

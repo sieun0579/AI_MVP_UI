@@ -121,7 +121,7 @@ def _fallback(evidence):
     }
 
 
-def generate(question, evidence, conversation_context=""):
+def generate(question, evidence, conversation_context="", project_status=""):
     if not evidence:
         return {"answer": "연결된 문서에서 질문과 관련된 내용을 찾지 못했습니다.", "citations": [], "caveats": []}
     state = ensure_started()
@@ -132,6 +132,9 @@ def generate(question, evidence, conversation_context=""):
         f"[{item['document_id']}] 문서={item['title']} / 상태={item['status']}\n{item['context'][:QWEN_CONTEXT_CHARS]}"
         for item in evidence[:QWEN_CONTEXT_TOP_K]
     )
+    status_rule = ""
+    if project_status == "진행중":
+        status_rule = "8. 이 프로젝트는 문서관리대장 기준 진행 중이다. 완료·성공·실제 성과·최종 결과를 단정하지 말고, 기획안의 KPI는 예정된 기준으로만 설명한다.\n"
     prompt = f"""너는 조직 내부 문서를 바탕으로 사용자의 질문에 답하는 AI다.
 
 [답변 원칙]
@@ -142,6 +145,7 @@ def generate(question, evidence, conversation_context=""):
 5. 숫자, 비용, 일정 등 중요한 정보는 구체적으로 유지한다.
 6. 문서에 없는 내용은 추측하지 않는다.
 7. 과거 사례를 현재 상황에 무조건 적용해야 한다고 표현하지 않는다.
+{status_rule}
 
 [답변 형식]
 필요한 섹션만 사용하고 전체 답변은 간결하게 작성한다.

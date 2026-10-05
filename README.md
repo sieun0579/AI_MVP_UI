@@ -21,11 +21,12 @@ ollama pull qwen2.5:3b
 
 ## 문서 연동
 
-- 지원 형식: `.txt`, `.md`, `.docx`
-- Drive API와 OAuth를 사용하지 않습니다. 공개 Google Docs/DOCX 링크를 60초마다 백그라운드에서 조건부 확인합니다.
-- 최초 한 번만 원문을 받고 이후에는 내용이 바뀐 문서만 로컬 캐시와 색인을 교체합니다.
+- 지원 형식: `.txt`, `.md`, `.csv`, `.docx`
+- 앱 시작 시 Drive 루트 폴더를 재귀적으로 탐색해 문서관리대장, 프로젝트, 표준 업무 매뉴얼, 양식의 새 파일·수정 파일·삭제 파일을 반영합니다.
+- Google Drive OAuth 읽기 권한이 없을 때만 기존 공개 링크 목록을 동기화합니다.
+- 최초 실행은 동기화가 끝난 뒤 열리며, 이후에는 내용이 바뀐 문서만 로컬 캐시와 색인을 교체합니다.
 - 질문은 동기화를 기다리지 않고 현재 로컬 RAG 색인으로 즉시 처리됩니다.
-- `data/drive_manifest.csv`에 파일명과 공개 원본 링크를 등록합니다.
+- `data/drive_manifest.csv`는 OAuth를 설정하지 못한 환경을 위한 대체 동기화 목록입니다.
 - PDF/HWP는 DOCX 또는 TXT로 내보낸 뒤 등록합니다.
 
 ## 검색·답변 방식
@@ -80,7 +81,7 @@ ACTIVE_PROJECT_SELECTION_MARGIN=0.08
 - 이미 완료된 프로젝트에서 저장한 기억 카드는 즉시 공식 기억으로 확정하고 Drive 반영을 시도합니다.
 - 업로드 오류는 후보와 공식 기억을 삭제하지 않으며 검토함에서 확인하고 재시도할 수 있습니다.
 
-Drive 쓰기에는 Google Drive API와 Google Docs API 범위를 가진 OAuth 인증이 필요합니다. 다음 중 하나를 실행 환경에 설정하세요.
+전체 Drive 동기화와 Drive 쓰기에는 Google Drive API 읽기 권한(`drive.readonly`) 및 Google Docs API 범위를 가진 OAuth 인증이 필요합니다. 다음 중 하나를 실행 환경에 설정하세요.
 
 ```bash
 # 짧은 테스트용
@@ -90,6 +91,9 @@ export MOMENTLAB_GOOGLE_ACCESS_TOKEN="..."
 export MOMENTLAB_GOOGLE_CLIENT_ID="..."
 export MOMENTLAB_GOOGLE_CLIENT_SECRET="..."
 export MOMENTLAB_GOOGLE_REFRESH_TOKEN="..."
+
+# 기본값은 MVP 공유 Drive 루트 폴더입니다. 다른 Drive를 사용할 때만 지정합니다.
+export MOMENTLAB_DRIVE_ROOT_FOLDER_ID="Google Drive 루트 폴더 ID"
 ```
 
 앱은 기존 프로젝트 문서의 부모 폴더를 조회해 같은 폴더에 새 Google 문서를 만듭니다. 자동 탐색이 어려운 경우 프로젝트별 폴더 ID를 지정할 수 있습니다.

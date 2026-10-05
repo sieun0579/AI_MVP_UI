@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from db import init_db
+from importers import _is_manual
 from services.ollama_client import expand_query, generate, predict_search_terms
 from services.public_drive_sync import _download_url
 from services.retrieval import clear_search_cache, find_documents_by_title, search_documents
@@ -19,7 +20,7 @@ class SearchTests(unittest.TestCase):
         self.con.close()
         self.temp.cleanup()
 
-    def add_doc(self, doc_id, project_id, content, *, status="approved", version="v1.0", family=None, title=None):
+    def add_doc(self, doc_id, project_id, content, *, status="approved", version="v1.0", family=None, title=None, doc_type="회의록"):
         family = family or doc_id
         title = title or doc_id
         self.con.execute(
@@ -27,7 +28,7 @@ class SearchTests(unittest.TestCase):
               document_id,project_id,document_family_id,title,document_type,version,status,visibility,
               effective_start,source_path,source_name,source_drive_url,content
             ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (doc_id, project_id, family, title, "회의록", version, status, "all",
+            (doc_id, project_id, family, title, doc_type, version, status, "all",
              "2026-01-01", "x.txt", "x.txt", "https://drive.google.com/x", content),
         )
         self.con.commit()
@@ -108,6 +109,45 @@ class SearchTests(unittest.TestCase):
             self.con, "U-06 CREWAVE 하이브리드 크리에이터 어워즈 기획안 보여줄래?"
         )
         self.assertEqual("U06", rows[0]["document_id"])
+
+    def test_project_question_keeps_relevant_manual_as_foundation_context(self):
+        self.add_doc(
+            "MANUAL", "ORG", "예산 승인 전에는 마케팅팀 검토와 재무팀 결재가 필요하다",
+            title="마케팅팀 업무 매뉴얼", doc_type="업무매뉴얼",
+        )
+        self.add_doc("U06", "U-06", "U-06 예산 승인 절차는 담당자가 결재를 요청하는 방식이다")
+
+        rows = search_documents(con=self.con, question="U-06 예산 승인 절차는?", allowed_project_ids=["U-06"])
+
+        self.assertEqual("MANUAL", rows[0]["document_id"])
+
+    def test_manual_only_search_excludes_project_cases(self):
+        self.add_doc(
+            "MANUAL", "ORG", "결재 요청은 작성자 검토와 최종 승인 순서로 진행한다",
+            title="전사 업무 매뉴얼", doc_type="업무매뉴얼",
+        )
+        self.add_doc("CASE", "U-02", "결재 요청 사례와 승인 결과", title="U-02 결재 요청 사례")
+
+        rows = search_documents(self.con, "업무 매뉴얼에서 결재 요청 절차", foundation_only=True)
+
+        self.assertEqual(["MANUAL"], [row["document_id"] for row in rows])
+
+    def test_history_search_excludes_projects_marked_active_in_registry(self):
+        self.add_doc(
+            "REG", "REG", "프로젝트명|프로젝트 ID|진행상황|문서 ID\n진행 프로젝트|U-06|진행중|ACTIVE",
+            title="문서관리대장", doc_type="문서관리대장",
+        )
+        self.add_doc("ACTIVE", "U-06", "과거 반려 이유는 예산 근거가 부족했기 때문이다", status="rejected")
+        self.add_doc("CLOSED", "U-05", "과거 반려 이유는 예산 근거가 부족했기 때문이다", status="rejected")
+
+        rows = search_documents(self.con, "과거 반려 이유는?")
+
+        ids = {row["document_id"] for row in rows}
+        self.assertIn("CLOSED", ids)
+        self.assertNotIn("ACTIVE", ids)
+
+    def test_common_work_template_is_foundation_document(self):
+        self.assertTrue(_is_manual(Path("data/source_docs/_other/04 공통 업무 양식.txt")))
 
 
 if __name__ == "__main__":

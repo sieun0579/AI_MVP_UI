@@ -5,7 +5,8 @@ from pathlib import Path
 from db import init_db
 from services.project_context import (
     active_project_answer, explicit_project, is_active_project_list_question,
-    is_current_project_question, is_followup_question, load_active_projects,
+    in_progress_result_answer, in_progress_project_id, is_current_project_question, is_followup_question,
+    is_result_question, load_active_projects,
     new_session_context, project_ids, select_entity_from_results,
 )
 from services.retrieval import clear_search_cache, search_documents
@@ -104,6 +105,22 @@ class ProjectContextTests(unittest.TestCase):
         )
         self.con.commit()
         self.assertNotIn("A 프로젝트", {item["name"] for item in load_active_projects(self.con)})
+
+    def test_12_active_project_result_question_does_not_claim_completed_performance(self):
+        self.assertTrue(is_result_question("U-01 프로젝트 성과 알려줘"))
+        result = in_progress_result_answer("U-01", [{"document_id": "A-DOC"}])
+        self.assertIn("진행 중", result["answer"])
+        self.assertIn("확정할 수 없습니다", result["answer"])
+        self.assertEqual(["A-DOC"], result["citations"])
+
+    def test_13_active_project_excludes_performance_report_from_search(self):
+        self._doc("A-RPT", "U-01", "A 프로젝트 최종 성과보고서", "성과보고서", "최종 성과와 완료 결과")
+        rows = search_documents(self.con, "U-01 프로젝트 성과", allowed_project_ids=["U-01"])
+        self.assertNotIn("A-RPT", {row["document_id"] for row in rows})
+
+    def test_14_search_result_recovers_active_project_without_session_entity(self):
+        projects = load_active_projects(self.con)
+        self.assertEqual("U-01", in_progress_project_id(projects, "", [{"project_id": "U-01"}]))
 
     def test_list_intent_is_rule_based(self):
         self.assertTrue(is_active_project_list_question("새 프로젝트 뭐 있어?"))

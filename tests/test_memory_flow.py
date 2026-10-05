@@ -135,6 +135,18 @@ class MemoryFlowTests(unittest.TestCase):
         self.con.commit()
         self.assertTrue(project_is_complete(self.con, "U-03"))
 
+    def test_active_registry_status_overrides_an_erroneous_performance_report(self):
+        self.con.execute(
+            """INSERT INTO documents(document_id,project_id,document_family_id,title,document_type,version,status,visibility,source_path,source_name,source_drive_url,content)
+               VALUES('REG','REG','REG','문서관리대장','문서관리대장','v1','approved','all','x','x','','프로젝트명|프로젝트 ID|진행상황|문서 ID\nU-03 프로젝트|U-03|진행중|RPT')"""
+        )
+        self.con.execute(
+            """INSERT INTO documents(document_id,project_id,document_family_id,title,document_type,version,status,visibility,source_path,source_name,source_drive_url,content)
+               VALUES('RPT','U-03','RPT','최종 보고서','성과보고서','v1','approved','all','x','x','https://drive.google.com/file/d/X','완료')"""
+        )
+        self.con.commit()
+        self.assertFalse(project_is_complete(self.con, "U-03"))
+
     def test_active_project_candidate_stays_editable(self):
         candidate_id = save_candidate(self.con, "U-03", "원문", "초안", title="카드")
         update_candidate(self.con, candidate_id, "수정 제목", "수정 내용")

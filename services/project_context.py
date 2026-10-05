@@ -25,6 +25,8 @@ DETAIL_TERMS = (
     "일정", "담당자", "예산", "취소", "장소", "결정", "변경", "언제", "누구",
     "얼마", "진행 상황", "자세히",
 )
+RESULT_TERMS = ("성과", "결과", "성공", "완료")
+MANUAL_TERMS = ("매뉴얼", "메뉴얼")
 REGISTRY_MARKERS = ("문서관리대장", "문서 관리 대장")
 STATUS_FIELDS = ("진행상황", "진행 상태", "progress_status", "status")
 ACTIVE_STATUS = "진행중"
@@ -66,6 +68,14 @@ def is_followup_question(question):
     return any(_compact(term) in compact for term in FOLLOWUP_TERMS) or (
         len(question.strip()) <= 20 and any(term in question for term in DETAIL_TERMS)
     )
+
+
+def is_result_question(question):
+    return any(term in question for term in RESULT_TERMS)
+
+
+def is_manual_question(question):
+    return any(term in question for term in MANUAL_TERMS)
 
 
 def _registry_documents(con):
@@ -251,6 +261,34 @@ def explicit_project(projects, question):
 
 def project_ids(projects):
     return sorted({item["project_id"] for item in projects if item.get("project_id")})
+
+
+def is_active_project(con, project_id):
+    return bool(project_id) and project_id in project_ids(load_active_projects(con))
+
+
+def in_progress_project_id(projects, preferred_project_id, documents):
+    active_ids = set(project_ids(projects))
+    if preferred_project_id in active_ids:
+        return preferred_project_id
+    return next((item.get("project_id", "") for item in documents if item.get("project_id") in active_ids), "")
+
+
+def in_progress_result_answer(project_id, documents):
+    project_document = next(
+        (item for item in documents if item.get("project_id") == project_id),
+        next(iter(documents), None),
+    )
+    citations = [project_document["document_id"]] if project_document else []
+    return {
+        "answer": (
+            f"{project_id} 프로젝트는 문서관리대장 기준 진행 중이므로 최종 성과를 확정할 수 없습니다. "
+            "현재 기획안에 기록된 KPI와 측정 방식은 예정된 성과 기준이며, 실제 성과는 종료 후 "
+            "성과보고서가 승인되고 문서관리대장 상태가 변경된 뒤에만 안내할 수 있습니다."
+        ),
+        "citations": citations,
+        "caveats": ["문서관리대장 진행상황이 ‘진행중’이므로 완료·성공·최종 성과로 해석하지 않습니다."],
+    }
 
 
 def select_entity_from_results(projects, results):

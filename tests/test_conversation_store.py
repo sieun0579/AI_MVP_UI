@@ -3,7 +3,7 @@ import sqlite3
 from db import init_db
 from services.conversation_store import (
     backfill_legacy_sessions, create_session, list_sessions, load_session,
-    make_title, save_exchange, session_exists,
+    delete_session, make_title, rename_session, save_exchange, session_exists,
 )
 from services.project_context import new_session_context
 
@@ -27,13 +27,19 @@ def test_01_new_empty_chat_is_not_stored(tmp_path):
 
 def test_02_first_question_creates_title_without_llm(tmp_path):
     con = database(tmp_path)
-    create_session(con, "s1", "  첫 번째   사용자 질문입니다  ", new_session_context())
-    assert list_sessions(con)[0]["title"] == "첫 번째 사용자 질문입니다"
+    create_session(con, "s1", "U-06 프로젝트 성과 알려줘", new_session_context())
+    assert list_sessions(con)[0]["title"] == "U-06 프로젝트 성과"
 
 
 def test_03_title_is_truncated(tmp_path):
-    assert make_title("가" * 100).endswith("…")
+    assert make_title("가" * 100).endswith("요약")
     assert len(make_title("가" * 100)) == 42
+
+
+def test_03b_title_removes_request_ending_before_noun_suffix():
+    title = make_title("표준 업무 매뉴얼에서 결재 요청 어떻게 하는지 설명해줘")
+    assert "설명해줘" not in title
+    assert title.endswith("요약")
 
 
 def test_04_exchange_and_answer_are_restored(tmp_path):
@@ -104,3 +110,23 @@ def test_10_legacy_conversations_are_backfilled(tmp_path):
     backfill_legacy_sessions(con)
     assert session_exists(con, "old")
     assert load_session(con, "old")["history"][0]["answer"]["answer"] == "옛 답변"
+
+
+def test_11_session_title_can_be_renamed(tmp_path):
+    con = database(tmp_path)
+    create_session(con, "s1", "결재 절차 알려줘", new_session_context())
+    assert rename_session(con, "s1", "결재 요청 절차")
+    assert load_session(con, "s1")["title"] == "결재 요청 절차"
+
+
+def test_12_deleting_session_removes_its_saved_chat(tmp_path):
+    con = database(tmp_path)
+    create_session(con, "s1", "질문", new_session_context())
+    save_exchange(con, "s1", 0, sample_exchange(), new_session_context())
+    con.execute("INSERT INTO conversations(project_id,role,speaker,message,session_id) VALUES('','member','user','질문','s1')")
+    con.commit()
+
+    assert delete_session(con, "s1")
+    assert not session_exists(con, "s1")
+    assert con.execute("SELECT count(*) FROM chat_exchanges WHERE session_id='s1'").fetchone()[0] == 0
+    assert con.execute("SELECT count(*) FROM conversations WHERE session_id='s1'").fetchone()[0] == 0

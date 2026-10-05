@@ -19,6 +19,7 @@ STOPWORDS = {
     "했어", "해야", "프로젝트", "에서는", "그리고", "하지만", "가장", "제일",
 }
 HISTORY_WORDS = ("반려", "거절", "과거", "이전", "당시", "변경", "실패", "회고", "왜")
+FOUNDATION_DOCUMENT_TYPES = {"업무매뉴얼"}
 EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 _embedding_model = None
 _search_cache = OrderedDict()
@@ -196,6 +197,15 @@ def _approved_memories(con):
     ]
 
 
+def _is_foundation(document):
+    return document.get("document_type") in FOUNDATION_DOCUMENT_TYPES
+
+
+def _active_project_ids(con):
+    from services.project_context import load_active_projects, project_ids
+    return set(project_ids(load_active_projects(con)))
+
+
 def _semantic_passages(con, question, sources):
     if not sources:
         return {}
@@ -225,6 +235,7 @@ def _semantic_passages(con, question, sources):
 def search_documents(
     con, question, limit=None, terms=(), return_metadata=False,
     allowed_document_ids=None, allowed_project_ids=None, force_document_scope=False,
+    foundation_only=False,
 ):
     """Hybrid RAG: combine typo-tolerant lexical relevance with local semantic vectors."""
     limit = SEARCH_TOP_K if limit is None else limit
@@ -232,7 +243,7 @@ def search_documents(
     project_scope = tuple(sorted(allowed_project_ids or ()))
     cache_key = (
         _index_version(con), _normalized_question(question), tuple(terms), limit,
-        document_scope, project_scope, force_document_scope,
+        document_scope, project_scope, force_document_scope, foundation_only,
     )
     cached = _search_cache.get(cache_key)
     if cached and time.monotonic() - cached[0] <= SEARCH_CACHE_TTL:
@@ -247,12 +258,27 @@ def search_documents(
         for value in PROJECT_PATTERN.findall(question)
     }
     documents = _eligible_documents(con, include_history) + _approved_memories(con)
+    if foundation_only:
+        documents = [row for row in documents if _is_foundation(row)]
+    active_projects = _active_project_ids(con)
+    documents = [
+        row for row in documents
+        if not (row.get("project_id") in active_projects and row.get("document_type") == "성과보고서")
+    ]
+    if include_history:
+        documents = [row for row in documents if row.get("project_id") not in active_projects]
     if document_scope:
         documents = [row for row in documents if row["document_id"] in document_scope]
     if project_scope:
-        documents = [row for row in documents if row.get("project_id") in project_scope]
+        documents = [
+            row for row in documents
+            if row.get("project_id") in project_scope or _is_foundation(row)
+        ]
     if requested_projects:
-        documents = [row for row in documents if row["project_id"].upper() in requested_projects]
+        documents = [
+            row for row in documents
+            if row["project_id"].upper() in requested_projects or _is_foundation(row)
+        ]
 
     phrases = list(dict.fromkeys([question, *terms]))
     query_words = list(dict.fromkeys(word for phrase in phrases for word in _words(phrase)))
@@ -280,7 +306,8 @@ def search_documents(
         if row["document_type"] in {"성과보고서", "회고록"}:
             hybrid += 0.02
         forced = force_document_scope and row["document_id"] in document_scope
-        if forced or (hybrid >= 0.34 and (coverage >= 0.12 or semantic_score >= 0.35 or requested_projects)):
+        foundation_match = _is_foundation(row) and (coverage >= 0.12 or semantic_score >= 0.35)
+        if forced or foundation_match or (hybrid >= 0.34 and (coverage >= 0.12 or semantic_score >= 0.35 or requested_projects)):
             passage = semantic_passage if semantic_score >= 0.48 else lexical_passage
             if not passage:
                 passage = _passages(row["content"])[0]
@@ -299,6 +326,10 @@ def search_documents(
     else:
         cutoff = max(0.34, ranked[0]["score"] * 0.72)
         result = [item for item in ranked if item["score"] >= cutoff][:limit]
+        if project_scope or requested_projects:
+            foundation = next((item for item in ranked if _is_foundation(item)), None)
+            if foundation:
+                result = [foundation, *(item for item in result if item is not foundation)][:limit]
     _search_cache[cache_key] = (time.monotonic(), deepcopy(result))
     _search_cache.move_to_end(cache_key)
     while len(_search_cache) > SEARCH_CACHE_SIZE:

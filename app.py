@@ -10,18 +10,19 @@ from db import init_db
 from importers import import_all
 from services.ollama_client import expand_query, generate, predict_search_terms
 from services.conversation_store import (
-    backfill_legacy_sessions, create_session, list_sessions, load_session,
-    save_exchange, session_exists,
+    backfill_legacy_sessions, create_session, delete_session, list_sessions,
+    load_session, rename_session, save_exchange, session_exists,
 )
 from services.memory_flow import (
     assess_candidate, assess_statement, close_project_memories, discard_candidate, is_fact_statement, pending_candidates,
     failed_retrospective_exports, project_is_complete, publish_candidate, publish_retrospective,
     save_candidate, update_candidate,
 )
-from services.public_drive_sync import start_background_sync
+from services.public_drive_sync import start_background_sync, sync_once
 from services.project_context import (
     active_project_answer, explicit_project, is_active_project_list_question,
-    is_current_project_question, is_followup_question, load_active_projects,
+    in_progress_project_id, in_progress_result_answer, is_current_project_question,
+    is_followup_question, is_manual_question, is_result_question, load_active_projects,
     new_session_context, project_ids, select_entity_from_results,
 )
 from services.retrieval import find_documents_by_title, highlight_html, search_documents
@@ -31,11 +32,127 @@ from services.retrospective_draft import (
 )
 
 
-st.set_page_config(page_title="MomentLab 조직 기억", page_icon="🧠", layout="centered")
+st.set_page_config(page_title="MomentLab 조직 기억", page_icon="🧠", layout="wide")
+
+
+def apply_figma_theme():
+    st.markdown(
+        """
+        <style>
+        :root {
+          --moment-ink: #302827;
+          --moment-muted: #8b807e;
+          --moment-rose: #bd6271;
+          --moment-soft-rose: #f9e8e8;
+          --moment-paper: #fffdfb;
+          --moment-line: #efe7e4;
+        }
+        .stApp { background: #fcf9f7; color: var(--moment-ink); }
+        [data-testid="stHeader"] { background: transparent; }
+        [data-testid="stToolbar"] { right: 1rem; }
+        [data-testid="stSidebar"] {
+          background: var(--moment-paper);
+          border-right: 1px solid var(--moment-line);
+        }
+        [data-testid="stSidebar"] > div:first-child { padding: 2rem 0.85rem; }
+        [data-testid="stSidebar"] .sidebar-brand {
+          align-items: center; display: flex; gap: 0.65rem; margin: 0.15rem 0 1.35rem; padding: 0 0.15rem;
+        }
+        [data-testid="stSidebar"] .sidebar-brand strong { color: var(--moment-ink); display: block; font-size: 0.91rem; letter-spacing: -0.03em; }
+        [data-testid="stSidebar"] .sidebar-brand small { color: var(--moment-muted); display: block; font-size: 0.62rem; margin-top: 0.1rem; }
+        [data-testid="stSidebar"] .brand-mark {
+          background: var(--moment-soft-rose); border-radius: 50%; display: inline-block; height: 1.75rem; position: relative; width: 1.75rem;
+        }
+        [data-testid="stSidebar"] .brand-mark::before {
+          border: 1.8px solid var(--moment-rose); border-radius: 50%; content: ""; height: 0.7rem; left: 0.48rem; position: absolute; top: 0.42rem; width: 0.78rem;
+        }
+        [data-testid="stSidebar"] .brand-mark::after {
+          border-bottom: 1.8px solid var(--moment-rose); content: ""; left: 0.51rem; position: absolute; top: 1.17rem; transform: rotate(-33deg); width: 0.28rem;
+        }
+        [data-testid="stSidebar"] h3 {
+          color: var(--moment-muted); font-size: 0.73rem; font-weight: 700;
+          letter-spacing: 0.02em; margin: 1.8rem 0 0.55rem;
+        }
+        [data-testid="stSidebar"] .stButton > button {
+          border: 0; background: transparent; color: #625957; border-radius: 8px;
+          font-size: 0.8rem; font-weight: 500; min-height: 2.45rem; padding: 0.45rem 0.65rem;
+          text-align: left;
+        }
+        [data-testid="stSidebar"] .stButton > button[kind="primary"] {
+          background: var(--moment-rose); color: white; text-align: center; box-shadow: none;
+        }
+        [data-testid="stSidebar"] button[kind="secondary"] {
+          border: 0; background: transparent; color: #625957; border-radius: 8px;
+        }
+        [data-testid="stSidebar"] button[kind="primary"] {
+          border: 0; background: var(--moment-rose); color: white; box-shadow: none;
+        }
+        [data-testid="stSidebar"] [class*="st-key-chat-"] button[kind="primary"] {
+          background: var(--moment-soft-rose); color: #71504f; text-align: left;
+        }
+        [data-testid="stSidebar"] [class*="st-key-menu-"] button {
+          background: transparent; color: #766c6a; font-size: 1.35rem; font-weight: 700; line-height: 1; min-height: 2.2rem; padding: 0; width: 2rem;
+        }
+        [data-testid="stSidebar"] [class*="st-key-menu-"] button p { line-height: 1; margin: 0; transform: translateY(-0.08rem); }
+        [data-testid="stSidebar"] .stButton > button:hover { background: var(--moment-soft-rose); color: var(--moment-rose); }
+        [data-testid="stSidebar"] button[kind="secondary"]:hover { background: var(--moment-soft-rose); color: var(--moment-rose); }
+        [data-testid="stSidebar"] .stButton > button[kind="primary"]:hover { background: #aa5363; color: white; }
+        [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] { gap: 0.2rem; }
+        .block-container { max-width: 1040px; padding: 3.2rem 2.6rem 8rem; }
+        h1 { color: var(--moment-ink); font-size: 1.7rem !important; font-weight: 750; letter-spacing: -0.045em; margin-bottom: 0.2rem; }
+        [data-testid="stCaptionContainer"] { color: var(--moment-muted); }
+        [data-testid="stChatMessage"] {
+          background: transparent; border: 0; box-shadow: none; margin: 0.75rem 0; padding: 0;
+        }
+        [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] { color: var(--moment-ink); font-size: 0.93rem; line-height: 1.7; }
+        [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
+          justify-content: flex-end; margin-left: 0; width: 100%; max-width: none;
+        }
+        [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageAvatarUser"] { display: none; }
+        [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] {
+          background: var(--moment-soft-rose); border-radius: 14px 14px 3px 14px; flex: 0 1 68%; margin: 0 0 0 auto; padding: 0.75rem 1rem;
+        }
+        [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stChatMessageAvatarAssistant"] {
+          background: var(--moment-soft-rose); color: var(--moment-rose);
+        }
+        [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stChatMessageContent"] {
+          background: var(--moment-paper); border: 1px solid var(--moment-line); border-radius: 3px 18px 18px; box-shadow: 0 3px 14px rgba(78, 48, 45, 0.035); padding: 1rem 1.15rem;
+        }
+        [data-testid="stExpander"] {
+          border: 1px solid var(--moment-line); border-radius: 10px; background: #fff; overflow: hidden;
+          box-shadow: none;
+        }
+        [data-testid="stExpander"] summary { background: var(--moment-soft-rose); color: #514747; font-size: 0.82rem; }
+        [data-testid="stChatInput"] { border: 1px solid #eadedd; border-radius: 12px; background: white; box-shadow: 0 6px 20px rgba(75, 40, 40, 0.07); }
+        [data-testid="stChatInput"] textarea { color: var(--moment-ink); font-size: 0.9rem; }
+        [data-testid="stChatInput"] button { background: var(--moment-rose); color: white; border-radius: 8px; }
+        [data-testid="stAlert"] { border-radius: 10px; }
+        [data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea {
+          background: #fffdfa; border-color: #ead3d5; border-radius: 10px;
+        }
+        [data-testid="stCheckbox"] input { accent-color: var(--moment-rose); }
+        section.main .stButton > button[kind="secondary"] {
+          background: #fffdfa; border-color: #dfbfc4; color: #6e4c51;
+        }
+        section.main .stButton > button[kind="primary"] { background: var(--moment-rose); border-color: var(--moment-rose); }
+        [data-testid="stProgress"] > div > div { background: var(--moment-rose); }
+        @media (min-width: 900px) {
+          [data-testid="stSidebar"] { min-width: 255px; max-width: 255px; }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+apply_figma_theme()
 con = init_db()
 if not con.execute("SELECT 1 FROM documents LIMIT 1").fetchone() and Path("data/drive_manifest.csv").exists():
     import_all()
     con = init_db()
+if "initial_drive_sync" not in st.session_state:
+    sync_once()
+    st.session_state.initial_drive_sync = True
 start_background_sync()
 backfill_legacy_sessions(con)
 
@@ -74,6 +191,10 @@ if "view" not in st.session_state:
     st.session_state.view = "chat"
 
 with st.sidebar:
+    st.markdown(
+        '''<div class="sidebar-brand"><span class="brand-mark" aria-hidden="true"></span><div><strong>조직 기억</strong><small>모먼트랩 업무 공간</small></div></div>''',
+        unsafe_allow_html=True,
+    )
     if st.button(
         "＋ 새 질문", use_container_width=True, type="primary",
         help="현재 대화는 보존하고 빈 대화를 시작합니다.",
@@ -87,12 +208,52 @@ with st.sidebar:
     for item in sessions:
         selected = item["session_id"] == st.session_state.session_id
         label = ("▸ " if selected else "") + item["title"]
-        if st.button(
-            label, key=f"chat-{item['session_id']}", use_container_width=True,
+        session_id = item["session_id"]
+        if st.session_state.get("renaming_session") == session_id:
+            edited_title = st.text_input("대화 이름", value=item["title"], key=f"rename-input-{session_id}")
+            save_col, cancel_col = st.columns(2)
+            if save_col.button("저장", key=f"rename-save-{session_id}"):
+                rename_session(con, session_id, edited_title)
+                st.session_state.pop("renaming_session", None)
+                st.rerun()
+            if cancel_col.button("취소", key=f"rename-cancel-{session_id}"):
+                st.session_state.pop("renaming_session", None)
+                st.rerun()
+            continue
+        chat_col, menu_col = st.columns([9, 1])
+        if chat_col.button(
+            label, key=f"chat-{session_id}", use_container_width=True,
             type="primary" if selected else "secondary",
         ):
-            restore_chat(item["session_id"])
+            restore_chat(session_id)
             st.rerun()
+        if menu_col.button("⋮", key=f"menu-{session_id}", help="대화 메뉴"):
+            st.session_state.chat_menu_session = (
+                "" if st.session_state.get("chat_menu_session") == session_id else session_id
+            )
+            st.rerun()
+        if st.session_state.get("chat_menu_session") == session_id:
+            rename_col, delete_col = st.columns(2)
+            if rename_col.button("이름 수정", key=f"rename-{session_id}"):
+                st.session_state.renaming_session = session_id
+                st.session_state.pop("chat_menu_session", None)
+                st.rerun()
+            if delete_col.button("삭제", key=f"delete-{session_id}"):
+                st.session_state.deleting_session = session_id
+                st.session_state.pop("chat_menu_session", None)
+                st.rerun()
+        if st.session_state.get("deleting_session") == session_id:
+            st.caption("이 대화를 삭제할까요?")
+            confirm_col, cancel_col = st.columns(2)
+            if confirm_col.button("삭제", key=f"delete-confirm-{session_id}", type="primary"):
+                delete_session(con, session_id)
+                st.session_state.pop("deleting_session", None)
+                if selected:
+                    start_new_chat()
+                st.rerun()
+            if cancel_col.button("취소", key=f"delete-cancel-{session_id}"):
+                st.session_state.pop("deleting_session", None)
+                st.rerun()
     st.markdown("### 조직기억")
     pending_count = len(pending_candidates(con))
     if st.button(
@@ -337,6 +498,7 @@ def render_exchange(exchange, index):
     with st.chat_message("assistant"):
         cited = set(exchange["answer"].get("citations", []))
         sources = [item for item in exchange["documents"] if item["document_id"] in cited]
+        st.markdown(exchange["answer"]["answer"])
         if sources:
             st.markdown("##### 관련 문서·근거")
             for item in sources:
@@ -344,7 +506,6 @@ def render_exchange(exchange, index):
                     st.markdown(highlight_html(item["excerpt"], exchange["terms"]), unsafe_allow_html=True)
                     if item["source_drive_url"]:
                         st.link_button("Google Drive에서 원문 보기", item["source_drive_url"])
-        st.markdown(exchange["answer"]["answer"])
         for caveat in exchange["answer"].get("caveats", []):
             st.caption(caveat)
         render_candidate(exchange, index)
@@ -373,10 +534,11 @@ if question and question.strip():
         direct_project_list = is_active_project_list_question(question)
         direct_statement = False
         statement_candidate = None
+        registry_active_projects = load_active_projects(con)
         title_matches = [] if direct_project_list else find_documents_by_title(con, question)
         scope = project_context.get("active_project_scope") or []
         active_entity = project_context.get("active_entity")
-        explicit = explicit_project(scope, question) if scope else None
+        explicit = explicit_project(registry_active_projects, question)
         inferred_current = False
         scoped_search = False
         scoped_fell_back = False
@@ -467,12 +629,19 @@ if question and question.strip():
             )
             allowed_projects = project_ids(selected_scope)
             title_document_ids = [item["document_id"] for item in title_matches]
+            manual_only = (
+                is_manual_question(question)
+                and not selected_scope
+                and not title_document_ids
+                and not re.search(r"(?<![A-Z0-9])U-?\d{2}(?!\d)", question, re.I)
+            )
             scoped_search = bool(allowed_projects or title_document_ids)
             documents, cache_hit = search_documents(
                 con, question, terms=terms, return_metadata=True,
                 allowed_document_ids=title_document_ids or None,
                 allowed_project_ids=None if title_document_ids else (allowed_projects or None),
                 force_document_scope=bool(title_document_ids),
+                foundation_only=manual_only,
             )
             if scoped_search and not title_document_ids and (
                 not documents or documents[0]["score"] < ACTIVE_PROJECT_SEARCH_THRESHOLD
@@ -509,6 +678,7 @@ if question and question.strip():
                     allowed_document_ids=title_document_ids or None,
                     allowed_project_ids=None if title_document_ids else (retry_scope or None),
                     force_document_scope=bool(title_document_ids),
+                    foundation_only=manual_only,
                 )
                 search_elapsed = time.perf_counter() - search_started
                 cache_hit = cache_hit or retry_cache_hit
@@ -535,12 +705,6 @@ if question and question.strip():
                 print(f"[SEARCH] indexed chunk count for document: {chunk_count}")
                 if chunk_count == 0:
                     print("[SEARCH] ERROR: document exists but has no indexed chunks")
-            st.markdown("##### 관련 문서·근거")
-            for item in documents[:3]:
-                with st.expander(item["title"]):
-                    st.markdown(highlight_html(item["excerpt"], terms), unsafe_allow_html=True)
-                    if item["source_drive_url"]:
-                        st.link_button("Google Drive에서 원문 보기", item["source_drive_url"])
         answer_status = st.empty()
         if direct_project_list or direct_statement:
             context_elapsed = 0.0
@@ -559,11 +723,32 @@ if question and question.strip():
             context_elapsed = time.perf_counter() - context_started
             answer_status.info("AI가 내용을 정리하고 있습니다...")
             generation_started = time.perf_counter()
-            answer = generate(question, documents, conversation_context=conversation_context)
+            active_projects = load_active_projects(con)
+            answer_project_id = in_progress_project_id(
+                active_projects,
+                (project_context.get("active_entity") or {}).get("project_id", ""),
+                documents,
+            )
+            active_project = bool(answer_project_id)
+            active_result = active_project and is_result_question(question)
+            answer = (
+                in_progress_result_answer(answer_project_id, documents)
+                if active_result else generate(
+                    question, documents, conversation_context=conversation_context,
+                    project_status="진행중" if active_project else "",
+                )
+            )
             generation_elapsed = time.perf_counter() - generation_started
             print("[ANSWER] qwen_generation=true")
         answer_status.empty()
         st.markdown(answer["answer"])
+        if documents:
+            st.markdown("##### 관련 문서·근거")
+            for item in documents[:3]:
+                with st.expander(item["title"]):
+                    st.markdown(highlight_html(item["excerpt"], terms), unsafe_allow_html=True)
+                    if item["source_drive_url"]:
+                        st.link_button("Google Drive에서 원문 보기", item["source_drive_url"])
         for caveat in answer.get("caveats", []):
             st.caption(caveat)
 

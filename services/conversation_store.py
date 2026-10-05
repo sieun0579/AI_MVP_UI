@@ -1,17 +1,25 @@
 import json
+import re
 
 from services.project_context import new_session_context
 
 
 TITLE_LIMIT = 42
+_NOUN_ENDINGS = ("성과", "절차", "기준", "현황", "결과", "내용", "일정", "예산", "담당자", "요약", "정리", "분석", "목록", "확인")
 
 
 def make_title(question, limit=TITLE_LIMIT):
     """Create a deterministic sidebar title without calling the LLM."""
     title = " ".join((question or "").split())
+    title = re.sub(r"[?!。.]+$", "", title)
+    title = re.sub(r"(?:알려|설명|정리|보여|찾아)(?:해)?(?:줘|주세요|줄래|줄 수 있어)?$", "", title).strip()
+    title = title or "새 대화"
+    if not title.endswith(_NOUN_ENDINGS):
+        title += " 요약"
     if len(title) <= limit:
         return title
-    return title[: max(limit - 1, 1)].rstrip() + "…"
+    suffix = " 요약" if title.endswith(" 요약") else "…"
+    return title[: max(limit - len(suffix), 1)].rstrip() + suffix
 
 
 def _json(value):
@@ -32,6 +40,27 @@ def session_exists(con, session_id):
     return con.execute(
         "SELECT 1 FROM chat_sessions WHERE session_id=?", (session_id,)
     ).fetchone() is not None
+
+
+def rename_session(con, session_id, title):
+    title = " ".join((title or "").split())[:TITLE_LIMIT]
+    if not title or not session_exists(con, session_id):
+        return False
+    con.execute(
+        "UPDATE chat_sessions SET title=?, updated_at=CURRENT_TIMESTAMP WHERE session_id=?",
+        (title, session_id),
+    )
+    con.commit()
+    return True
+
+
+def delete_session(con, session_id):
+    if not session_exists(con, session_id):
+        return False
+    con.execute("DELETE FROM conversations WHERE session_id=?", (session_id,))
+    con.execute("DELETE FROM chat_sessions WHERE session_id=?", (session_id,))
+    con.commit()
+    return True
 
 
 def create_session(con, session_id, first_question, context):
